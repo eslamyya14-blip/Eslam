@@ -86,56 +86,60 @@ class AudioCoachEngine {
     this.currentVoice = voice;
   }
 
-  public async fetchTTSAudio(text: string, voice = this.currentVoice): Promise<AudioBuffer> {
-    const cacheKey = `${voice}:::${text}`;
+  public async fetchTTSAudio(text: string, voice = this.currentVoice): Promise<AudioBuffer | null> {
+    const cleanText = text.replace(/[*_#~]/g, " ").trim();
+    const cacheKey = `${voice}:::${cleanText}`;
     if (this.cache.has(cacheKey)) {
       return this.cache.get(cacheKey)!;
     }
 
-    const response = await fetch('/api/tts', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        text,
-        voice,
-      }),
-    });
+    try {
+      const response = await fetch('/api/tts', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          text: cleanText,
+          voice,
+        }),
+      });
 
-    if (!response.ok) {
-      const errorData = await response.json().catch(() => ({}));
-      throw new Error(errorData.error || `TTS request failed (${response.status})`);
-    }
+      if (!response.ok) {
+        return null;
+      }
 
-    const data = await response.json();
-    if (!data.audio) {
-      throw new Error('Server returned empty audio data');
-    }
+      const data = await response.json();
+      if (data.fallbackToClient || !data.audio) {
+        return null;
+      }
 
-    const ctx = this.getAudioContext();
-    const binary = atob(data.audio);
-    const len = binary.length;
-    const bytes = new Uint8Array(len);
-    for (let i = 0; i < len; i++) {
-      bytes[i] = binary.charCodeAt(i);
-    }
+      const ctx = this.getAudioContext();
+      const binary = atob(data.audio);
+      const len = binary.length;
+      const bytes = new Uint8Array(len);
+      for (let i = 0; i < len; i++) {
+        bytes[i] = binary.charCodeAt(i);
+      }
 
-    let buffer: AudioBuffer;
-    const isWav =
-      bytes.length > 4 &&
-      String.fromCharCode(bytes[0], bytes[1], bytes[2], bytes[3]) === 'RIFF';
+      let buffer: AudioBuffer;
+      const isWav =
+        bytes.length > 4 &&
+        String.fromCharCode(bytes[0], bytes[1], bytes[2], bytes[3]) === 'RIFF';
 
-    if (isWav) {
-      try {
-        buffer = await ctx.decodeAudioData(bytes.buffer.slice(0));
-      } catch (e) {
+      if (isWav) {
+        try {
+          buffer = await ctx.decodeAudioData(bytes.buffer.slice(0));
+        } catch (e) {
+          buffer = this.decodeRawPcm(bytes, ctx, data.sampleRate || 24000);
+        }
+      } else {
         buffer = this.decodeRawPcm(bytes, ctx, data.sampleRate || 24000);
       }
-    } else {
-      buffer = this.decodeRawPcm(bytes, ctx, data.sampleRate || 24000);
-    }
 
-    this.cache.set(cacheKey, buffer);
-    return buffer;
+      this.cache.set(cacheKey, buffer);
+      return buffer;
+    } catch {
+      return null;
+    }
   }
 
   private decodeRawPcm(bytes: Uint8Array, ctx: AudioContext, sampleRate = 24000): AudioBuffer {
@@ -174,9 +178,12 @@ class AudioCoachEngine {
 
     try {
       const buffer = await this.fetchTTSAudio(text, voice);
-      this.playBuffer(buffer);
-    } catch (err: any) {
-      console.warn('Gemini TTS request encountered an issue, running browser speech fallback:', err);
+      if (buffer) {
+        this.playBuffer(buffer);
+        return;
+      }
+      this.playClientSpeechFallback(text, onEnded);
+    } catch {
       this.playClientSpeechFallback(text, onEnded);
     }
   }
@@ -312,21 +319,36 @@ class AudioCoachEngine {
       .replace(/[*_#~`]/g, ' ')
       .trim();
 
-    // 2. Transliterate managerial acronyms into natural Egyptian spoken phonetics
+    // 2. Transliterate English managerial formulas to Egyptian Arabic so voice never stumbles
     t = t
+      .replace(/Problem and Data/gi, 'المشكلة والداتا')
+      .replace(/Problem equals Data/gi, 'المشكلة يعني داتا')
+      .replace(/Risk and Priority/gi, 'الريسك والأولوية')
+      .replace(/Risk determines Priority/gi, 'حجم الخطر بيحدد الأولوية')
+      .replace(/Immediate Action and Ownership/gi, 'التحرك الفوري والمسؤولية')
+      .replace(/Action equals Ownership/gi, 'الأكشن يعني مسؤولية كاملة')
+      .replace(/RCA and Bottleneck/gi, 'تحليل السبب ومكان الخنقة')
+      .replace(/CAPA and Standardization/gi, 'الخطة الوقائية وتوحيد الإجراء')
+      .replace(/Stakeholders and Cross-functional/gi, 'التنسيق مع الإدارات والموردين')
+      .replace(/Follow-up and Closure/gi, 'المتابعة وتقفيل الملف')
+      .replace(/Data-driven/gi, 'مبني على الأرقام')
+      .replace(/Prioritization/gi, 'ترتيب الأولويات')
+      .replace(/5 Whys/gi, 'خمسة واي، اسأل ليه 5 مرات')
+      .replace(/Root Cause Analysis/gi, 'تحليل السبب الجذري')
+      .replace(/Closing Loop/gi, 'تقفيل الدائرة')
       .replace(/\bSLAs\b/gi, 'اتفاقيات الإس إل إيه')
       .replace(/\bSLA\b/gi, 'إس إل إيه')
       .replace(/\bKPIs\b/gi, 'مؤشرات الكي بي آي')
       .replace(/\bKPI\b/gi, 'كي بي آي')
       .replace(/\bRCA\b/gi, 'آر سي إيه، تحليل السبب الجذري')
-      .replace(/\bCAPA\b/gi, 'كابا، الخطة الوقائية والتصحيحية')
+      .replace(/\bCAPA\b/gi, 'كابا، الخطة الوقائية')
       .replace(/\bTAT\b/gi, 'تات، زمن تسليم العينات')
-      .replace(/\bNPS\b/gi, 'إن بي إس، مؤشر رضا المرضى')
+      .replace(/\bNPS\b/gi, 'إن بي إس، مؤشر رضا المريض')
       .replace(/\bBottlenecks?\b/gi, 'مكان الخنقة')
       .replace(/\bBatch(ing)?\b/gi, 'باتشات تجميع')
       .replace(/\bRACI\b/gi, 'مصفوفة راكي للمسؤوليات')
       .replace(/\bSOPs?\b/gi, 'إس أو بي، دليل الإجراء القياسي')
-      .replace(/\bSection Head\b/gi, 'رئيس قسم')
+      .replace(/\bSection Head\b/gi, 'رئيس قسم العمليات')
       .replace(/\bOperations?\b/gi, 'العمليات')
       .replace(/\bSupport\b/gi, 'الدعم التشغيلي')
       .replace(/\bDashboard\b/gi, 'لوحة المتابعة')
@@ -334,6 +356,7 @@ class AudioCoachEngine {
 
     // 3. Phonetic Egyptian Vocalization (تشكيل وضبط مخارج الألفاظ المصرية لعدم نطقها فصحى جافة)
     t = t
+      .replace(/يا إسلام/g, 'يَا إِسْلَامْ')
       .replace(/يا فندم/g, 'يَا فَنْدِمْ')
       .replace(/مفيش/g, 'مَفِيشْ')
       .replace(/علشان/g, 'عَلَشَانْ')
@@ -343,6 +366,7 @@ class AudioCoachEngine {
       .replace(/بدل ما/g, 'بَدَلْ مَا')
       .replace(/هنعمل/g, 'هَنِعْمِلْ')
       .replace(/هنتحرك/g, 'هَنِتْحَرَّكْ')
+      .replace(/هننزل/g, 'هَنِنْزِلْ')
       .replace(/بص يا فندم/g, 'بُصْ يَا فَنْدِمْ')
       .replace(/نزلت الميدان/g, 'نِزِلْتْ المِيدَانْ')
       .replace(/نزلنا الميدان/g, 'نِزِلْنَا المِيدَانْ')
@@ -355,7 +379,14 @@ class AudioCoachEngine {
       .replace(/عينات/g, 'عَيِّنَاتْ')
       .replace(/معامل/g, 'مَعَامِلْ')
       .replace(/أزمة/g, 'أَزْمَة')
-      .replace(/أنا مسؤول/g, 'أَنَا مَسْؤُولْ');
+      .replace(/أنا مسؤول/g, 'أَنَا مَسْؤُولْ')
+      .replace(/زي ما بنقول/g, 'زَيّْ مَا بِنْقُولْ')
+      .replace(/إزاي/g, 'إِزَّايْ')
+      .replace(/كويس/g, 'كُوَيِّسْ')
+      .replace(/حاجة/g, 'حَاجَة')
+      .replace(/حاجات/g, 'حَاجَاتْ')
+      .replace(/فين/g, 'فِينْ')
+      .replace(/كام/g, 'كَامْ');
 
     return t;
   }

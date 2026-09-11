@@ -58,9 +58,12 @@ export const AudioPlayerBar: React.FC<AudioPlayerBarProps> = ({
               {trackTitle || 'تدريب صوتي مع الكوتش'}
             </p>
             <div className="flex items-center gap-2 text-[11px] text-slate-400 font-medium">
-              <span className="text-amber-400 font-mono">Gemini TTS</span>
+              <span className="inline-flex items-center gap-1 text-emerald-400 font-semibold bg-emerald-500/10 px-1.5 py-0.5 rounded border border-emerald-500/20">
+                <span>🇪🇬</span>
+                <span>بالعامية المصرية الواثقة</span>
+              </span>
               <span>•</span>
-              <span className="text-slate-300">{voiceName}</span>
+              <span className="text-slate-300">كوتش العمليات الميداني</span>
             </div>
           </div>
           <div className="hidden lg:block w-20">

@@ -90,6 +90,7 @@ app.get("/api/health", (_req, res) => {
 
 // Server-side in-memory audio cache to preserve Gemini TTS quota
 const ttsAudioCache = new Map<string, { audio: string; mimeType: string; sampleRate: number }>();
+let ttsQuotaCooldownUntil = 0;
 
 // Text-to-Speech Endpoint using gemini-3.1-flash-tts-preview
 // In Egyptian Arabic coaching tone with deliberate, confident pauses
@@ -105,6 +106,16 @@ app.post("/api/tts", async (req, res) => {
     const cacheKey = `${voice}:::${cleanText}`;
     if (ttsAudioCache.has(cacheKey)) {
       res.json(ttsAudioCache.get(cacheKey));
+      return;
+    }
+
+    // If quota was previously exhausted, signal client to use the high-fidelity Egyptian speech synthesizer
+    if (Date.now() < ttsQuotaCooldownUntil) {
+      res.status(200).json({
+        fallbackToClient: true,
+        reason: "quota_cooldown",
+        retryAfterMs: ttsQuotaCooldownUntil - Date.now(),
+      });
       return;
     }
 
@@ -131,8 +142,9 @@ app.post("/api/tts", async (req, res) => {
     const base64Audio = audioPart?.inlineData?.data;
 
     if (!base64Audio) {
-      res.status(500).json({
-        error: "No audio generated from Gemini TTS model",
+      res.status(200).json({
+        fallbackToClient: true,
+        reason: "no_audio_data",
       });
       return;
     }
@@ -146,9 +158,23 @@ app.post("/api/tts", async (req, res) => {
     ttsAudioCache.set(cacheKey, result);
     res.json(result);
   } catch (error: any) {
-    console.log("TTS generation error (falling back to Egyptian browser audio):", error?.message || error);
-    res.status(500).json({
-      error: error?.message || "Failed to generate speech",
+    const errorMsg = String(error?.message || error || "");
+    const is429 = errorMsg.includes("429") || errorMsg.includes("RESOURCE_EXHAUSTED") || error?.status === 429;
+    if (is429) {
+      // Cooldown for 5 minutes so subsequent requests smoothly use client speech without throwing errors
+      ttsQuotaCooldownUntil = Date.now() + 5 * 60 * 1000;
+      res.status(200).json({
+        fallbackToClient: true,
+        reason: "quota_exceeded",
+        message: "Gemini TTS quota exceeded, smoothly running local Egyptian dialect engine",
+      });
+      return;
+    }
+
+    res.status(200).json({
+      fallbackToClient: true,
+      reason: "server_fallback",
+      message: errorMsg,
     });
   }
 });
