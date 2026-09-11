@@ -1,0 +1,6 @@
+{
+  "name": "Manager Mode - مدرب التفكير القيادي وعقلية المدير",
+  "description": "النسخة المطابقة الشاملة لمحاكاة عقلية المدير بالعامية المصرية ونبرة كوتش هادئة وواثقة مع وقفات تثبيت المفاهيم ومحرر تخصيص المحاور.",
+  "requestFramePermissions": ["microphone"],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
